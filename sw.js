@@ -1,4 +1,4 @@
-const CACHE_NAME = "taaloola-v2";
+const CACHE_NAME = "taaloola-v3";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
@@ -33,32 +33,53 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Fetch Event - Stale-While-Revalidate Strategy for dynamic assets
+// Fetch Event
 self.addEventListener("fetch", (event) => {
-  // Only cache GET requests
+  // Only handle GET requests
   if (event.request.method !== "GET") return;
 
+  const isHTML =
+    event.request.mode === "navigate" ||
+    event.request.destination === "document" ||
+    (event.request.headers.get("accept") || "").includes("text/html");
+
+  // Network-first for HTML/pages so updates are always fresh when online.
+  // Falls back to cache only when offline.
+  if (isHTML) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  // Stale-while-revalidate for other assets (images, fonts, scripts).
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request).then((networkResponse) => {
-        // Cache successful and same-origin or image requests
-        if (
-          networkResponse.status === 200 &&
-          (event.request.url.startsWith(self.location.origin) ||
-            event.request.destination === "image" ||
-            event.request.url.includes("unpkg.com") ||
-            event.request.url.includes("googleapis.com") ||
-            event.request.url.includes("gstatic.com"))
-        ) {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, networkResponse.clone());
-          });
-        }
-        return networkResponse;
-      }).catch(() => {
-        // Fallback for offline mode if asset is not in cache
-        return cachedResponse;
-      });
+      const fetchPromise = fetch(event.request)
+        .then((networkResponse) => {
+          if (
+            networkResponse.status === 200 &&
+            (event.request.url.startsWith(self.location.origin) ||
+              event.request.destination === "image" ||
+              event.request.url.includes("unpkg.com") ||
+              event.request.url.includes("googleapis.com") ||
+              event.request.url.includes("gstatic.com"))
+          ) {
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, networkResponse.clone());
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => cachedResponse);
 
       return cachedResponse || fetchPromise;
     })
